@@ -141,16 +141,21 @@
         ><button id="walk-map">Minimap</button
         ><span id="current-room">Entrance</span><span id="walk-room-size"></span
         ><span id="walk-control-hint"
-          >WASD move · Mouse look · E doors · M map</span
+          >WASD or Left joystick · Drag to look · Open / close nearby door · M
+          map</span
         >
+        <div id="joystick" role="group" aria-label="Drag to move">
+          <span></span>
+        </div>
+        <button id="touch-interact" disabled>Face a nearby door to open / close it</button>
         <div id="reticle">+</div>
         <div id="interaction-hint"></div>
         <div id="walk-instructions">
           <strong>Click to look around</strong
           ><span
-            >WASD move · Mouse look · E doors<br />Shift walk faster · M map ·
-            Esc release</span
-          ><small>Walkthrough is optimised for keyboard and mouse.</small>
+            >WASD move · Left joystick · Drag to look · Open / close<br />Shift
+            walk faster · M map · Esc release</span
+          ><small>Walkthrough supports mobile touch controls.</small>
         </div>
       </div>
       <div id="minimap" hidden>
@@ -266,5 +271,180 @@
         /></label>
       </details>
     </section>
+    <script>
+      (() => {
+        const walkHint = {
+          control:
+            "WASD or Left joystick · Drag to look · Open / close nearby door · M map",
+          instruction:
+            "WASD move · Left joystick · Drag to look · Open / close<br />Shift walk faster · M map · Esc release",
+          buttonIdle: "Face a nearby door",
+          mobileSupport:
+            "Walkthrough supports touch controls on mobile devices.",
+        };
+        const touchState = {
+          pointerId: null,
+          radius: 42,
+          knob: null,
+          active: false,
+        };
+        const walkControlHint = document.getElementById("walk-control-hint");
+        const walkInstructions = document.querySelector("#walk-instructions span");
+        const walkInstructionSub = document.querySelector("#walk-instructions small");
+        const walkInteractionHint = document.getElementById("interaction-hint");
+        const touchInteract = document.getElementById("touch-interact");
+        const joystick = document.getElementById("joystick");
+
+        if (walkControlHint) {
+          walkControlHint.textContent = walkHint.control;
+        }
+        if (walkInstructions) {
+          walkInstructions.innerHTML = walkHint.instruction;
+        }
+        if (walkInstructionSub) {
+          walkInstructionSub.textContent = walkHint.mobileSupport;
+        }
+
+        function syncTouchButton(player) {
+          if (!touchInteract || !walkInteractionHint) {
+            return;
+          }
+          const text = (walkInteractionHint.textContent || "").trim();
+          if (!text) {
+            touchInteract.disabled = true;
+            touchInteract.textContent = walkHint.buttonIdle;
+            return;
+          }
+          const action = /close/i.test(text) ? "Close" : "Open";
+          touchInteract.disabled = false;
+          touchInteract.textContent = `${action} door`;
+        }
+
+        function setMovementKeys(player, x, y) {
+          if (!player?.keys) {
+            return;
+          }
+          const keys = player.keys;
+          const dead = 0.22;
+          const nx = x / touchState.radius;
+          const ny = y / touchState.radius;
+          const wanted = new Set();
+          if (nx < -dead) wanted.add("KeyA");
+          if (nx > dead) wanted.add("KeyD");
+          if (ny < -dead) wanted.add("KeyW");
+          if (ny > dead) wanted.add("KeyS");
+
+          ["KeyA", "KeyD", "KeyW", "KeyS"].forEach((code) => {
+            if (wanted.has(code)) {
+              keys.add(code);
+            } else {
+              keys.delete(code);
+            }
+          });
+        }
+
+        function handleMove(player, event) {
+          if (!touchState.active || event.pointerId !== touchState.pointerId) {
+            return;
+          }
+          if (!joystick || !touchState.knob) {
+            return;
+          }
+          const rect = joystick.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          const dx = event.clientX - cx;
+          const dy = event.clientY - cy;
+          const magnitude = Math.hypot(dx, dy);
+          const clamped = magnitude === 0 ? 0 : Math.min(magnitude, touchState.radius);
+          const nx = magnitude === 0 ? 0 : (dx / magnitude) * clamped;
+          const ny = magnitude === 0 ? 0 : (dy / magnitude) * clamped;
+          touchState.knob.style.transform = `translate(${nx}px, ${ny}px)`;
+          setMovementKeys(player, nx, ny);
+        }
+
+        function startJoystick(player, event) {
+          if (!joystick || !player || touchState.active || event.pointerType === "mouse") {
+            return;
+          }
+          const knob = joystick.querySelector("span");
+          if (!knob) return;
+          touchState.active = true;
+          touchState.pointerId = event.pointerId;
+          touchState.knob = knob;
+          if (joystick.setPointerCapture) {
+            joystick.setPointerCapture(event.pointerId);
+          }
+          handleMove(player, event);
+          event.preventDefault();
+        }
+
+        function endJoystick(player) {
+          if (!touchState.active) return;
+          touchState.active = false;
+          touchState.pointerId = null;
+          if (touchState.knob) {
+            touchState.knob.style.transform = "";
+            touchState.knob = null;
+          }
+          if (player?.keys) {
+            player.keys.delete("KeyA");
+            player.keys.delete("KeyD");
+            player.keys.delete("KeyW");
+            player.keys.delete("KeyS");
+          }
+        }
+
+        function initTouchControls() {
+          const app = window.corkham;
+          if (!app) {
+            requestAnimationFrame(initTouchControls);
+            return;
+          }
+          const player = app.player || app.walk?.player;
+          if (!player) {
+            requestAnimationFrame(initTouchControls);
+            return;
+          }
+          if (!joystick || !touchInteract) {
+            return;
+          }
+          joystick.addEventListener(
+            "pointerdown",
+            (event) => startJoystick(player, event),
+            { passive: false }
+          );
+          joystick.addEventListener(
+            "pointermove",
+            (event) => handleMove(player, event),
+            { passive: false }
+          );
+          joystick.addEventListener(
+            "pointerup",
+            () => endJoystick(player)
+          );
+          joystick.addEventListener(
+            "pointercancel",
+            () => endJoystick(player)
+          );
+          joystick.addEventListener(
+            "pointerleave",
+            () => endJoystick(player)
+          );
+          touchInteract.addEventListener("click", () => {
+            if (touchInteract.disabled) return;
+            const playerInteract = app.player?.onInteract || app.walk?.player?.onInteract;
+            playerInteract?.();
+          });
+          const tick = () => {
+            syncTouchButton(player);
+            requestAnimationFrame(tick);
+          };
+          tick();
+        }
+
+        requestAnimationFrame(initTouchControls);
+      })();
+    </script>
   </body>
 </html>
